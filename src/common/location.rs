@@ -1,3 +1,4 @@
+
 use crate::{Error, Header, HeaderName, HeaderValue};
 use http::{header, Uri};
 use std::iter;
@@ -41,7 +42,9 @@ impl Location {
 }
 
 impl Header for Location {
-    const NAME: &'static HeaderName = &header::LOCATION;
+    fn name() -> &'static HeaderName {
+        &header::LOCATION
+    }
 
     fn decode<'i, I>(values: &mut I) -> Result<Self, Error>
     where
