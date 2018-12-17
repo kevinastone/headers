@@ -95,4 +95,20 @@ mod tests {
 
         assert_eq!(loc, Location(Uri::from_static(s)));
     }
+
+    #[test]
+    fn absolute_uri_with_dot_path() {
+        let s = "http://www.example.net/something/../another";
+        let loc = test_decode::<Location>(&[s]).unwrap();
+
+        assert_eq!(loc, Location(Uri::from_static(s)));
+    }
+
+    #[test]
+    fn relative_uri_with_dot_path() {
+        let s = "../something";
+        let loc = test_decode::<Location>(&[s]).unwrap();
+
+        assert_eq!(loc, Location(Uri::from_static(s)));
+    }
 }
