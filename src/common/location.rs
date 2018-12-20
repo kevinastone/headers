@@ -1,5 +1,6 @@
 
 use crate::{Error, Header, HeaderName, HeaderValue};
+use crate::util::{TryFromValues, UriReference};
 use http::{header, Uri};
 use std::iter;
 
@@ -32,12 +33,20 @@ use std::iter;
 /// ```
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Location(Uri);
+pub struct Location(UriReference);
 
 impl Location {
     /// Get the uri for this header
-    pub fn uri(&self) -> &Uri {
+    pub fn uri_ref(&self) -> &UriReference {
         &self.0
+    }
+
+    /// Try to get an absolute Uri from this header
+    pub fn try_uri(&self) -> Option<&Uri> {
+        match self.uri_ref() {
+            UriReference::Uri(uri) => Some(uri),
+            _ => None,
+        }
     }
 }
 
@@ -51,27 +60,17 @@ impl Header for Location {
         Self: Sized,
         I: Iterator<Item = &'i HeaderValue>,
     {
-        values
-            .next()
-            .and_then(|v| v.to_str().ok()?.parse().ok())
-            .map(Location)
-            .ok_or_else(Error::invalid)
+        UriReference::try_from_values(values).map(Location)
     }
 
     fn encode<E: Extend<HeaderValue>>(&self, values: &mut E) {
-        values.extend(iter::once(self.into()))
+        values.extend(iter::once((&self.0).into()))
     }
 }
 
 impl From<Uri> for Location {
     fn from(uri: Uri) -> Self {
-        Location(uri)
-    }
-}
-
-impl From<&Location> for HeaderValue {
-    fn from(location: &Location) -> Self {
-        location.0.to_string().parse().unwrap()
+        Location(UriReference::uri(uri))
     }
 }
 
@@ -85,7 +84,7 @@ mod tests {
         let s = "http://www.example.net/index.html";
         let loc = test_decode::<Location>(&[s]).unwrap();
 
-        assert_eq!(loc, Location(Uri::from_static(s)));
+        assert_eq!(loc, Location(UriReference::uri(Uri::from_static(s))));
     }
 
     #[test]
@@ -93,7 +92,7 @@ mod tests {
         let s = "/People.html#tim";
         let loc = test_decode::<Location>(&[s]).unwrap();
 
-        assert_eq!(loc, Location(Uri::from_static(s)));
+        assert_eq!(loc, Location(UriReference::relative("/People.html#tim")));
     }
 
     #[test]
@@ -101,7 +100,7 @@ mod tests {
         let s = "http://www.example.net/something/../another";
         let loc = test_decode::<Location>(&[s]).unwrap();
 
-        assert_eq!(loc, Location(Uri::from_static(s)));
+        assert_eq!(loc, Location(UriReference::uri(Uri::from_static(s))));
     }
 
     #[test]
@@ -109,6 +108,6 @@ mod tests {
         let s = "../something";
         let loc = test_decode::<Location>(&[s]).unwrap();
 
-        assert_eq!(loc, Location(Uri::from_static(s)));
+        assert_eq!(loc, Location(UriReference::relative("../something")));
     }
 }

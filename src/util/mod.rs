@@ -11,6 +11,7 @@ pub(crate) use self::iter::IterExt;
 //pub use self::quality_value::{Quality, QualityValue};
 pub(crate) use self::seconds::Seconds;
 pub(crate) use self::value_string::HeaderValueString;
+pub(crate) use self::uri::UriReference;
 
 //mod charset;
 pub(crate) mod csv;
@@ -22,6 +23,7 @@ mod http_date;
 mod iter;
 //mod quality_value;
 mod seconds;
+mod uri;
 mod value_string;
 
 macro_rules! error_type {
