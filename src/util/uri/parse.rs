@@ -17,40 +17,30 @@ pub(super) fn parse_scheme(s: &str) -> Option<Range<usize>> {
     None
 }
 
-fn is_hex(ch: &char) -> bool {
-    match ch {
-        '0'...'9' | 'A'...'F' => true,
-        _ => false,
-    }
-}
-
-fn parse_pct_encoded<T>(iter: &mut T) -> Option<()>
+fn parse_pct_encoded<T>(iter: &mut T) -> Option<u8>
     where T: Iterator<Item=(usize, char)>
  {
     let mut iter = iter.map(|(_, ch)| ch);
 
-    if iter.next().filter(is_hex).is_none() {
-        return None;
-    }
-
-    if iter.next().filter(is_hex).is_none() {
-        return None;
-    }
-    Some(())
+    let mut ch = iter.next().and_then(|ch| ch.to_digit(16))? as u8;
+    ch <<= 4;
+    ch = ch.checked_add(iter.next().and_then(|ch| ch.to_digit(16))? as u8)?;
+    println!("Pct Encoded {:?}", ch);
+    Some(ch)
 }
 
 pub(super) fn parse_userinfo(s: &str) -> Option<Range<usize>> {
     let mut stream = s.chars().enumerate();
 
     while let Some((idx, ch)) = stream.next() {
-        match ch {
+        let _ = match ch {
             'a'...'z' | 'A'...'Z' | '0'...'9' | '-' | '.' | '_' | '~' => continue,  // Unreserved
             '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '=' => continue, // Sub-delims
             ':' => continue, // Colon
             '@' => return Some(0..idx),
             '%' => parse_pct_encoded(&mut stream)?,
             _ => return None
-        }
+        };
     }
 
     None
@@ -60,47 +50,48 @@ pub(super) fn parse_regname(s: &str) -> Option<Range<usize>> {
     let mut stream = s.chars().enumerate();
 
     while let Some((idx, ch)) = stream.next() {
-        match ch {
+        let _ = match ch {
             'a'...'z' | 'A'...'Z' | '0'...'9' | '-' | '.' | '_' | '~' => continue,  // Unreserved
             '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '=' => continue, // Sub-delims
             '%' => parse_pct_encoded(&mut stream)?,
             ':' => return Some(0..idx),
             _ => return None
-        }
+        };
     }
 
     Some(0..s.len())
 }
 
-fn parse_dec_octet(s: &[u8]) -> Option<()>
+fn parse_dec_octet(s: &[u8]) -> Result<Option<u8>, ()>
  {
     match s.len() {
         1 => match s[0] {
-            b'0' ... b'9' => Some(()),
-            _ => None
+            b'0' ... b'9' => Ok(Some(s[0] - b'0')),
+            _ => Ok(None),
         },
         2 => match (s[0], s[1]) {
-            (b'1' ... b'9', b'0' ... b'9') => Some(()),
-            _ => None,
+            (b'1' ... b'9', b'0' ... b'9') => Ok(Some((s[1] - b'0') * 10 + s[0] - b'0')),
+            (b'0' ... b'9', b'0' ... b'9') => Err(()),
+            _ => Ok(None),
         },
         3 => match (s[0], s[1], s[2]) {
-            (b'1', b'0' ... b'9', b'0' ... b'9') => Some(()),
-            (b'2', b'0' ... b'4', b'0' ... b'9') => Some(()),
-            (b'2', b'5', b'0' ... b'5') => Some(()),
-            _ => None,
+            (b'1', b'0' ... b'9', b'0' ... b'9') => Ok(Some(100 + (s[1] - b'0') * 10 + (s[0] - b'0'))),
+            (b'2', b'0' ... b'4', b'0' ... b'9') => Ok(Some(200 + (s[1] - b'0') * 10 + (s[0] - b'0'))),
+            (b'2', b'5', b'0' ... b'5') => Ok(Some(250 + (s[0] - b'0'))),
+            (b'0' ... b'9', b'0' ... b'9', b'0' ... b'9') => Err(()),
+            _ => Ok(None),
         }
-        _ => None,
+        _ => Ok(None),
     }
 }
 
-
 /// https://url.spec.whatwg.org/#ipv4-number-parser
-pub(super) fn parse_ipv4(s: &str) -> Option<Range<usize>> {
+pub(super) fn parse_ipv4(s: &str) -> Result<Option<Range<usize>>, ()> {
 
     let s = s.splitn(2, |ch| ch == ':' || ch == '/').next().unwrap();
 
     if s.is_empty() {
-        return None
+        return Ok(None)
     }
 
     let mut parts: Vec<_> = s.split('.').collect();
@@ -109,19 +100,20 @@ pub(super) fn parse_ipv4(s: &str) -> Option<Range<usize>> {
     }
 
     if parts.len() > 4 {
-        return None;
+        return Ok(None);
     }
 
     for part in parts {
-        parse_dec_octet(part.as_bytes())?
+        match parse_dec_octet(part.as_bytes())? {
+            Some(_) => continue,
+            None => return Ok(None),
+        };
     }
 
-
-
-    Some(0..s.len())
+    Ok(Some(0..s.len()))
 }
 
-pub(super) fn parse_authority(s: &str) -> Option<Range<usize>> {
+fn parse_authority_section(s: &str) -> Option<Range<usize>> {
 
     let mut stream = s.chars().enumerate();
     // Check for the leading the '//'
@@ -136,6 +128,17 @@ pub(super) fn parse_authority(s: &str) -> Option<Range<usize>> {
     }
 
     Some(2..s.len())
+}
+
+pub(super) fn parse_authority(s: &str) -> Option<Range<usize>> {
+    parse_authority_section(s).and_then(|r| {
+        let s = &s[r.clone()];
+
+        match parse_ipv4(s) {
+            Err(_) => return None,
+            Ok(value) => value,
+        }.or_else(|| parse_regname(s)).map(|_| r)
+    })
 }
 
 pub(super) fn parse_path(s: &str) -> Range<usize> {
@@ -203,10 +206,6 @@ mod tests {
         }
     }
 
-    fn parse_path_with_option(s: &str) -> Option<Range<usize>> {
-        Some(parse_path(s))
-    }
-
     #[test]
     fn test_parse_scheme() {
         assert_parse! {
@@ -250,14 +249,14 @@ mod tests {
                 "//127.0.0.1/whatever" => "127.0.0.1",
                 "//255.255.255.255" => "255.255.255.255",
                 "//1.2.3.4" => "1.2.3.4",
-                // IPV6
-                "//[FEDC:BA98:7654:3210:FEDC:BA98:7654:3210]:80/index.html" => "[FEDC:BA98:7654:3210:FEDC:BA98:7654:3210]:80",
-                "//[1080:0:0:0:8:800:200C:417A]/index.html" => "[1080:0:0:0:8:800:200C:417A]",
-                "//[3ffe:2a00:100:7031::1]" => "[3ffe:2a00:100:7031::1]",
-                "//[1080::8:800:200C:417A]/foo" => "[1080::8:800:200C:417A]",
-                "//[::192.9.5.5]/ipng" => "[::192.9.5.5]",
-                "//[::FFFF:129.144.52.38]:80/index.html" => "[::FFFF:129.144.52.38]:80",
-                "//[2010:836B:4179::836B:4179]" => "[2010:836B:4179::836B:4179]",
+                // // IPV6
+                // "//[FEDC:BA98:7654:3210:FEDC:BA98:7654:3210]:80/index.html" => "[FEDC:BA98:7654:3210:FEDC:BA98:7654:3210]:80",
+                // "//[1080:0:0:0:8:800:200C:417A]/index.html" => "[1080:0:0:0:8:800:200C:417A]",
+                // "//[3ffe:2a00:100:7031::1]" => "[3ffe:2a00:100:7031::1]",
+                // "//[1080::8:800:200C:417A]/foo" => "[1080::8:800:200C:417A]",
+                // "//[::192.9.5.5]/ipng" => "[::192.9.5.5]",
+                // "//[::FFFF:129.144.52.38]:80/index.html" => "[::FFFF:129.144.52.38]:80",
+                // "//[2010:836B:4179::836B:4179]" => "[2010:836B:4179::836B:4179]",
             )
         }
 
@@ -269,11 +268,10 @@ mod tests {
                 "something/another",
                 "_error",
                 "😎",
-                // // IPV4
-                // "//1.2.3",
-                // "//256.255.255.255",
-                // "//999.0.1.2",
-                // "//1.2.3.04",
+                // IPV4
+                "//256.255.255.255",
+                "//999.0.1.2",
+                "//1.2.3.04",
             )
         }
     }
@@ -294,7 +292,7 @@ mod tests {
         assert_not_parse! {
             parse_userinfo(
                 "something",
-                "user%2alice:passwd@example.com",
+                "user%2_alice:passwd@example.com",
                 "user%",
                 "user%$",
             )
@@ -303,8 +301,10 @@ mod tests {
 
     #[test]
     fn test_parse_ipv4() {
+        let parse_ipv4_with_option = |s: &str| parse_ipv4(s).ok().and_then(|o| o);
+
         assert_parse! {
-            parse_ipv4(
+            parse_ipv4_with_option(
                 "127.0.0.1" => "127.0.0.1",
                 "127.0.0.1:8000" => "127.0.0.1",
                 "127" => "127",
@@ -317,7 +317,7 @@ mod tests {
         }
 
         assert_not_parse! {
-            parse_ipv4(
+            parse_ipv4_with_option(
                 "something",
                 "user%2alice:passwd@example.com",
                 "user%",
@@ -340,11 +340,10 @@ mod tests {
             "240",
             "255",
         ] {
-            assert!(parse_dec_octet(input.as_bytes()).is_some(), "failed to parse: {}", input);
+            assert!(parse_dec_octet(input.as_bytes()).ok().and_then(|o| o).is_some(), "failed to parse: {}", input);
         }
 
         for input in vec![
-            "",
             "00",
             "000",
             "01",
@@ -353,10 +352,22 @@ mod tests {
             "256",
             "300",
             "999",
+        ] {
+            assert!(parse_dec_octet(input.as_bytes()).is_err(), "should have failed to parse: {}", input);
+        }
+
+        for input in vec![
+            "",
+            "A",
+            "0A",
+            "aaa",
+            "x",
+            "_",
+            "+",
             "2000",
             "0100",
         ] {
-            assert!(parse_dec_octet(input.as_bytes()).is_none(), "should have failed to parse: {}", input);
+            assert!(parse_dec_octet(input.as_bytes()).unwrap().is_none(), "should have failed to parse: {}", input);
         }
     }
 
@@ -381,6 +392,7 @@ mod tests {
 
     #[test]
     fn test_path() {
+        let parse_path_with_option = |s: &str| Some(parse_path(s));
 
         assert_parse! {
             parse_path_with_option(
